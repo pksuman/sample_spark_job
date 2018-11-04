@@ -1,0 +1,91 @@
+/**
+  * Created by sigmoid on 1/11/17.
+  */
+
+import java.io.{BufferedWriter, File, FileWriter}
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, SQLContext}
+import org.apache.spark.sql.Row
+import scala.util.Try
+
+
+object Iron {
+
+  val timestampFunc: (String => String) = (in:String) => {
+    println("-------------------------------------------"+ in+ "----------------------------------------------------")
+    in.substring(0,13)
+  }
+
+  val timestampSQLFunc = udf(timestampFunc)
+
+val samplingFunc : (Double => Long) = (in: Double) => {
+Math.round(1.0/in)
+}
+
+val samplingFuncUDF = udf(samplingFunc)
+
+  def main(args: Array[String]): Unit = {
+
+    val conf = new SparkConf().setAppName("ironsource-rtb-raw")
+    val sc = new SparkContext(conf)
+    val sQLContext = new SQLContext(sc)
+    sc.setLogLevel("OFF")
+    val file = new File("/home/ubuntu/hdp/ironsource-rtb/raw-data-check/iron_source_data_check/sample.csv")
+    val bw = new BufferedWriter(new FileWriter(file,true))
+    val newLine = System.getProperty("line.separator")
+    val files = args(0)
+    val filesp = args(1)
+    val filesn = args(2)
+    val hour = files.split("/").array{3}
+    bw.write("Hr,Imressions,Requests,Responses" + newLine)
+
+      val imp = sQLContext.read.json("s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/impressions/"+ files +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/impressions/"+ filesp +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/impressions/"+ filesn +"/*.log.gz")
+      val req = sQLContext.read.json("s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ files +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ filesp +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ filesn +"/*.log.gz")
+      val res = sQLContext.read.json("s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ files +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ filesp +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/req_response/"+ filesn +"/*.log.gz")
+//      val bid = sQLContext.read.json("s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/responses/"+ files +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/responses/"+ filesp +"/*.log.gz","s3n://AKIAJFJMX36CYCKJDCUA:s8lvpHoGBgeulXqxIVUP9fPv9UXKgJEOD6aNGEf2@sigmoid-ironsource-rtb/responses/"+ filesn +"/*.log.gz")
+
+      val reqWithTimestamp = req.withColumn("timestamp",timestampSQLFunc(req("request.id"))).withColumn("samplingFactor", samplingFuncUDF(req("factor")))
+
+      val reqFilter1 = reqWithTimestamp.filter(reqWithTimestamp("timestamp").geq(lit(args(3))))
+
+      val reqFilter2 = reqFilter1.filter(reqFilter1("timestamp").lt(lit(args(4))))
+
+      val auctionsCount = reqFilter2.select(col("samplingFactor")).rdd.map(_(0).asInstanceOf[Long]).reduce(_+_)
+
+      val resWithTimestamp = res.filter("response.id is not null").withColumn("timestamp",timestampSQLFunc(res("response.id")))
+
+      val resFilter1 = resWithTimestamp.filter(resWithTimestamp("timestamp").geq(lit(args(3))))
+
+      val resFilter2 = resFilter1.filter(resFilter1("timestamp").lt(lit(args(4))))
+
+      val resExplode1 = resFilter2.withColumn("seatbidx", explode(resFilter2("response.seatbid")))
+
+      val resExplode2 = resExplode1.withColumn("bidx", explode(resExplode1("seatbidx.bid")))
+
+      val resExplode3 = resExplode2.withColumn("impx", explode(resExplode2("request.imp")))
+
+      val resFilter3 = resExplode3.filter(resExplode3("impx.bidfloor") <= resExplode3("bidx.price"))
+
+      val impWithTimestamp = imp.withColumn("timestamp",timestampSQLFunc(imp("requestId")))
+
+      val impFilter1 = impWithTimestamp.filter(impWithTimestamp("timestamp").geq(lit(args(3))))
+
+      val impFilter2 = impFilter1.filter(impFilter1("timestamp").lt(lit(args(4))))
+
+      val impfinal = impFilter2.count
+      val requestfinal = resFilter3.select("response.id").distinct.count
+      val responsefinal = resFilter3.count
+
+//      bw.write(files +","+hour + "," + impFilter2.count + "," + reqFilter2.count + "," + resFilter2.withColumn("valid", explode(resFilter2("seatbid"))).select("id").distinct.count + "," + resFilter2.withColumn("validbid", explode(resFilter2("seatbid"))).count + newLine)
+//      println(files +","+hour + "," + impFilter2.count + "," + reqFilter2.count + "," + resFilter2.withColumn("valid", explode(resFilter2("seatbid"))).select("id").distinct.count + "," + resFilter2.withColumn("validbid", explode(resFilter2("seatbid"))).count)
+
+      bw.write(files +","+hour + "," + impfinal + "," + auctionsCount + "," + requestfinal + "," + responsefinal + newLine)
+      println(files +","+hour + "," + impfinal + "," + auctionsCount + "," + requestfinal + "," + responsefinal )
+
+    bw.close()
+	sc.stop()
+  }
+}
+
