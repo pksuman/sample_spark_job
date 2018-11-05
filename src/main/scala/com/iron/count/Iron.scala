@@ -20,7 +20,7 @@ object Iron {
     val sQLContext = new SQLContext(sc)
     sc.setLogLevel("OFF")
 
-    println("Helloooo nutanix...........................................")
+    println("Helloooo World...........................................")
   sc.stop()
   }
 }
